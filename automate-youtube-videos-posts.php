@@ -135,6 +135,9 @@ function addVideoToWorpdress($video) {
 	$post_id = wp_insert_post($post_data);
 	if($post_id) {
 		
+		// Set post type to format "video"
+		wp_set_post_terms($post_id, 'video', 'post_format');
+		
 		// Add meta (youtube video_id) to post data
 		add_post_meta($post_id, 'edgtf_video_type_meta', 'youtube');
 		add_post_meta($post_id, 'edgtf_post_video_id_meta', $video->video_id);
