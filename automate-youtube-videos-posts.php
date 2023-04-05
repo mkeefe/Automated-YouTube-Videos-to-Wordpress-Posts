@@ -1,24 +1,21 @@
 <?php
 
-// This script uses the YouTube V3 API to get a channel (yours) last 5 videos
+// This script uses the YouTube V3 API to get a channel (yours) last 10 videos
 // it then checks Wordpress and creates posts for any videos not previously
 // added to the Wordpress site.
 
 // Note: Requires Wordpress & Google API Key (recommend environment var "YOUTUBE_API_KEY")
-
-// @author - mkeefe (http://coderman.com)
+// Note: Create category 'YouTube' to assign to your video posts
 
 
 // Config vars
 
-$channel_id     = "XXXXXXXXXXXXXXXXXXXXXXXX";
-$max_results    = 5;
+$channel_id     = "";
+$max_results    = 10;
 $auth_key       = "";
 $order          = "date";
 
 // End Config vars
-
-
 
 
 // Set error reporting, not required
@@ -82,7 +79,7 @@ try {
 				$video_item->id->videoId, 
 				$video_item->snippet->title,
 				$video_item->snippet->description,
-				$video_item->snippet->thumbnails->high->url,
+				"https://i.ytimg.com/vi/{$video_item->id->videoId}/maxresdefault.jpg",
 				$video_item->snippet->publishedAt
 			);
 		
@@ -92,14 +89,34 @@ try {
 		}
 	
 		// Take found videos, look for entries in Wordpress DB or add them
+		print "<pre>";
 		foreach($videos as $video) {
 	
-			$checker = videoEntryExistsInWordpress('edgtf_post_video_id_meta', $video->video_id);
+			// See if post entry already exists, add if new
+			// Note: "edgtf_post_video_id_meta" is a custom field for my theme, use another field in your post meta
+			$checker = videoEntryExistsInWordpress($video->video_id, 'edgtf_post_video_id_meta');
 			if(!$checker) {
-				addVideoToWorpdress($video);
+				
+				// Grab specific video details
+				$video_search_url = "https://www.googleapis.com/youtube/v3/videos?part=snippet&id={$video->video_id}&key={$auth_key}";
+				$description_json = file_get_contents($video_search_url);
+				$description_raw = json_decode($description_json, true);
+				$description = $description_raw['items'][0]['snippet']['description'];
+				$video->video_description = $description;
+				
+				// Add video object as post entry (includes title and description)
+				$post_id = addVideoToWorpdress($video);
+				if (!empty($video->video_thumbnail)) {
+					// Add YouTube thumbnail as featured image
+					addFeaturedImageToPost($video->video_thumbnail, $post_id);
+				}
+				
+			} else {
+				if(OUTPUT_DEBUG) print "Did not add video: " . $video->video_title . NEW_LINE;
 			}
 	
 		}
+		print "</pre>";
 		
 		if(OUTPUT_DEBUG) print "Finished processing any new videos..." . NEW_LINE;
 	
@@ -117,38 +134,86 @@ try {
 // Function and Class definitions
 //
 
+function addFeaturedImageToPost($image_url, $post_id) {
+	
+	// Construct image path and image name
+	$image_name       = "{$post_id}_" . basename($image_url);
+	$upload_dir       = wp_upload_dir();
+	$image_data       = file_get_contents($image_url);
+	$unique_file_name = wp_unique_filename( $upload_dir['path'], $image_name );
+	$filename         = basename( $unique_file_name );
+
+	// Check folder permission and define file upload location
+	if( wp_mkdir_p( $upload_dir['path'] ) ) {
+	  $file = $upload_dir['path'] . '/' . $filename;
+	} else {
+	  $file = $upload_dir['basedir'] . '/' . $filename;
+	}
+
+	// Create the image on the server
+	file_put_contents( $file, $image_data );
+
+	// Check image file type
+	$wp_filetype = wp_check_filetype( $filename, null );
+
+	// Set attachment data
+	$attachment = array(
+	    'post_mime_type' => $wp_filetype['type'],
+	    'post_title'     => sanitize_file_name( $filename ),
+	    'post_content'   => '',
+	    'post_status'    => 'inherit'
+	);
+
+	// Create the attachment
+	$attach_id = wp_insert_attachment( $attachment, $file, $post_id );
+	require_once(ABSPATH . 'wp-admin/includes/image.php');
+	$attach_data = wp_generate_attachment_metadata( $attach_id, $file );
+	wp_update_attachment_metadata( $attach_id, $attach_data );
+
+	// And finally assign featured image to post
+	set_post_thumbnail( $post_id, $attach_id );
+	
+	if(OUTPUT_DEBUG) print " - Add thumbnail: " . $attachment['post_title'] . NEW_LINE;
+	
+}
+
 function addVideoToWorpdress($video) {
 	
 	// Create post array, passed into wp_insert_post()
 	$post_data = array(
-		'post_type'     => 'post' ,
-		'post_status'   => 'publish',
-		'post_author'   => 1,
-		'post_date'     => date("Y-m-d H:i:s", strtotime($video->publish_date)),
-		'post_title'    => $video->video_title,
-		'post_content'  => $video->video_description, 
-		'post_category' => array(get_cat_ID('YouTube')),
-		'tax_input'     => array('post_format' => 'video')
+		'post_type'		=> 'post' ,
+		'post_status'	=> 'publish',
+		'post_author'	=> 1,
+		'post_date'		=> date("Y-m-d H:i:s", strtotime($video->publish_date)), // video upload date
+		'post_title'	=> $video->video_title,
+		'post_content'	=> $video->video_description, 
+		'post_category'	=> array(get_cat_ID('YouTube'))
 	);
 
 	// Insert the post into Wordpress
 	$post_id = wp_insert_post($post_data);
 	if($post_id) {
 		
-		// Set post type to format "video"
 		wp_set_post_terms($post_id, 'video', 'post_format');
 		
 		// Add meta (youtube video_id) to post data
+		// Note: Custom fields, check your theme for proper field names for video ID
 		add_post_meta($post_id, 'edgtf_video_type_meta', 'youtube');
 		add_post_meta($post_id, 'edgtf_post_video_id_meta', $video->video_id);
 		
 		if(OUTPUT_DEBUG) print "Adding video: " . $video->video_title . NEW_LINE;
+		
+		// Finally, return post_id
+		return $post_id;
 	   
 	}
 	
+	// Issues? Let's return null to handle
+	return null;
+	
 }
 
-function videoEntryExistsInWordpress($flag='edgtf_post_video_id_meta', $video_id) {
+function videoEntryExistsInWordpress($video_id, $flag='edgtf_post_video_id_meta') {
 	
 	// Create search $args array
 	$args = array(
@@ -156,9 +221,10 @@ function videoEntryExistsInWordpress($flag='edgtf_post_video_id_meta', $video_id
 	       array(
 	           'key' => $flag,
 	           'value' => $video_id,
-	           'compare' => '=',
+	           'compare' => '='
 	       )
-	   )
+	   ),
+	   'post_status' => array('publish','future', 'private')
 	);
 	
 	// Do Wordpress query
@@ -171,7 +237,7 @@ function videoEntryExistsInWordpress($flag='edgtf_post_video_id_meta', $video_id
 }
 
 class YouTubeObject {
-	
+
 	// TODO: Make protected and add getter/setter
 	public $video_id;
 	public $video_title;
@@ -186,5 +252,5 @@ class YouTubeObject {
 		$this->video_thumbnail = $thumbnail;
 		$this->publish_date = $date;
 	}
-	
+
 }
