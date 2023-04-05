@@ -181,10 +181,10 @@ function addVideoToWorpdress($video) {
 	
 	// Create post array, passed into wp_insert_post()
 	$post_data = array(
-		'post_type'		=> 'post' ,
+		'post_type'	=> 'post' ,
 		'post_status'	=> 'publish',
 		'post_author'	=> 1,
-		'post_date'		=> date("Y-m-d H:i:s", strtotime($video->publish_date)), // video upload date
+		'post_date'	=> date("Y-m-d H:i:s", strtotime($video->publish_date)), // video upload date
 		'post_title'	=> $video->video_title,
 		'post_content'	=> $video->video_description, 
 		'post_category'	=> array(get_cat_ID('YouTube'))
